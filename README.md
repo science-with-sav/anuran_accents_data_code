@@ -1,5 +1,5 @@
 # anuran_accents
-This github repository houses all relevant data and code to Anuran Accents, Weaver et al. 2020. <br />Citation:
+This github repository houses all relevant data and code to "Anuran accents: continental-scale citizen science data reveal spatial and temporal patterns of call variability" by Savannah Weaver, Corey Callaghan, and Jodi Rowley, published by Ecology and Evolution in 2020. <br />DOI/Citation: tbd
 
 ## Folders
 **Weaver_collected_call_data**: Selection data for each recording analyzed.<br />**range_maps**: Necessary data to create range shapefiles.<br />**data_for_analysis**: Files that are created using these scripts and saved for use in one or more later scripts.<br />**exported_figures** & **exported_tables**: Created using these scripts and exported for use in the manuscript.
