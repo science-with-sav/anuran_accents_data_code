@@ -1,0 +1,671 @@
+---
+title: "Clean and Summarize Data"
+authors: "Savannah Weaver, Corey Callaghan"
+date: "01/01/2020"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 1
+---
+# Load Packages
+
+```{r setup, echo=T, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("readr")) install.packages("readr")
+library("readr")
+if (!require("dplyr")) install.packages("dplyr")
+library("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+library("tidyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+if (!require("sf")) install.packages("sf")
+library("sf")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("lwgeom")) install.packages("lwgeom")
+library("lwgeom")
+if (!require("rnaturalearth")) install.packages("rnaturalearth")
+library("rnaturalearth")
+if (!require("rnaturalearthdata")) install.packages("rnaturalearthdata")
+library("rnaturalearthdata")
+if (!require("patchwork")) install.packages("patchwork")
+library("patchwork")
+if (!require("mgcv")) install.packages("mgcv")
+library("mgcv")
+if (!require("rgeos")) install.packages("rgeos")
+library("rgeos")
+if (!require("broom")) install.packages("broom")
+library("broom")
+library(extrafont)
+loadfonts()
+```
+
+
+# Reading In Data
+
+```{r}
+all.species <- readRDS("data_for_analysis/call_dat.RDS")
+
+# find freq max and min across species and individuals based on single calls
+max(all.species$peak_freq_hz) #5062.5
+min(all.species$peak_freq_hz) #344.5
+```
+
+Select pertinent variables only:
+
+```{r}
+data <- all.species %>%
+  dplyr::select(id, species,
+                lat, lng,
+                delta_time_s,
+                peak_freq_hz,
+                capture_time_in_zone) %>%
+  mutate(date = as.Date(capture_time_in_zone))
+```
+
+Load expected number of observations for each species:
+
+```{r}
+expected <- read.table(textConnection("
+Species                   Unique_IDs
+Crinia_insignifera        123
+Crinia_parinsignifera     221
+Limnodynastes_dorsalis    82
+Limnodynastes_peronii     232
+Litoria_chloris           48
+Litoria_xanthomera        56
+"), header=TRUE)
+```
+
+Check expected values against actual:
+
+```{r}
+test <- data %>%
+  group_by(species) %>%
+  summarise(number=length(unique(id)))
+
+compare <- expected$Unique_IDs == test$number
+compare
+```
+
+
+# Get Date Ranges
+
+Export the date range of the recordings we analyzed:
+
+```{r}
+dates <- data %>%
+  group_by(species) %>%
+  mutate(earliest = min(date)) %>%
+  mutate(latest = max(date)) %>%
+  dplyr::select(species, earliest, latest) %>%
+  distinct()
+
+#write_csv(dates, "exported_tables/analyzed_sample_dates.csv")
+```
+
+
+# Calculate Summary Data
+
+For each individual/recording, we want to get the following data:
+-number of calls/notes analyzed
+-mean and standard deviation of call/note duration
+-mean and standard deviation of peak frequency
+
+```{r}
+per.individual <- data %>%
+  group_by(id, species, lat, lng, date) %>%
+  add_tally() %>%
+  summarise(n_calls = mean(n),
+            ind_mean_freq=mean(peak_freq_hz),
+            ind_sd_freq=sd(peak_freq_hz),
+            ind_mean_time=mean(delta_time_s),
+            ind_sd_time=sd(delta_time_s))
+```
+
+Also calculate these values for each species overall, export, and add to dataframe:
+
+```{r}
+sp_mean_sd <- per.individual %>%
+  group_by(species) %>%
+  summarize(sp_mean_freq=mean(ind_mean_freq),
+            sp_sd_freq=sd(ind_mean_freq),
+            sp_mean_time=mean(ind_mean_time),
+            sp_sd_time=sd(ind_mean_time))
+#write_csv(sp_mean_sd, "data_for_analysis/species_data.csv")
+
+per.ind.sp <- left_join(per.individual,
+                        sp_mean_sd,
+                        by = "species")
+
+# check proper joining, each should =6
+length(unique(per.ind.sp$sp_mean_freq))
+length(unique(per.ind.sp$sp_mean_time))
+length(unique(per.ind.sp$sp_sd_freq))
+length(unique(per.ind.sp$sp_sd_freq))
+
+# min and max frequencies based on individual means
+max(per.ind.sp$ind_mean_freq) #5015.633
+min(per.ind.sp$ind_mean_freq) #430.7
+```
+
+
+# Visualize Data Distribution
+
+Make histograms for call duration and peak frequency:
+
+```{r}
+# mean_freq
+ggplot(per.ind.sp, aes(x=ind_mean_freq)) +
+  geom_histogram(color="black", fill="steelblue", bins=50) +
+  theme_bw() +
+  facet_wrap(~species, scales="free") +
+  xlab("Mean Frequency")
+
+# mean_time
+ggplot(per.ind.sp, aes(x=ind_mean_time))+
+  geom_histogram(color="black", fill="steelblue", bins=50)+
+  theme_bw()+
+  facet_wrap(~species, scales="free")+
+  xlab("Mean Time")
+```
+
+Use one plot to compare call variables and their distribution among species:
+
+```{r}
+per.ind.sp %>%
+  rename(Frequency = ind_mean_freq) %>%
+  rename(Time = ind_mean_time) %>%
+  ggplot(., aes(x = Time,
+                y = Frequency/1000,
+                color = as.factor(species),
+                shape = species)) +
+  geom_point(size = 2) + 
+  scale_colour_manual(name = "Species",
+                      labels = c(expression(italic("Crinia insignifera")),
+                                 expression(italic("Crinia parinsignifera")),
+                                 expression(italic("Limnodynastes dorsalis")),
+                                 expression(italic("Limnodynastes peronii")),
+                                 expression(italic("Litoria chloris")),
+                                 expression(italic("Litoria xanthomera"))),
+                      values = c(rep(c(rgb(168/255,221/255,181/255),
+                                       rgb(67/255,162/255,202/255)),3))) +
+  scale_shape_manual(name = "Species",
+                     labels = c(expression(italic("Crinia insignifera")),
+                                 expression(italic("Crinia parinsignifera")),
+                                 expression(italic("Limnodynastes dorsalis")),
+                                 expression(italic("Limnodynastes peronii")),
+                                 expression(italic("Litoria chloris")),
+                                 expression(italic("Litoria xanthomera"))),
+                     values = c(15,15,16,16,17,17)) +
+  stat_ellipse(size = 0.5,
+               show.legend = FALSE) +
+  theme_classic() +
+  xlab("Mean Individual Call Duration (seconds)") +
+  ylab("Mean Individual Peak Frequency (kHz)") +
+  theme(text = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        legend.position = c(0.8, 0.8), 
+        legend.text.align = 0,
+        legend.title = element_blank()) -> compare_species_fig
+
+compare_species_fig
+
+#ggsave(filename = "compare_species_fig.png",
+ #      plot = compare_species_fig,
+  #     path = "./exported_figures",
+   #    device = "png",
+    #   dpi = 2400,#5.5MB
+     #  width = 7, height = 5)
+```
+
+
+# Visualize Species Ranges
+
+Get geographic data:
+
+```{r}
+# get geography of Australia
+aus <- st_as_sf(ne_countries(country = 'australia', scale = 'medium'))
+
+# get each species range map
+load("range_maps/Crinia_insignifera.RData")
+crinia_insignifera <- st_as_sf(range_map) 
+
+load("range_maps/Crinia_parinsignifera.RData")
+crinia_parinsignifera <- st_as_sf(range_map) 
+
+load("range_maps/Litoria_chloris.RData")
+litoria_chloris <- st_as_sf(range_map) 
+
+load("range_maps/Litoria_xanthomera.RData")
+litoria_xanthomera <- st_as_sf(range_map) 
+
+load("range_maps/Limnodynastes_peronii.RData")
+limnodynastes_peronii <- st_as_sf(range_map) 
+
+load("range_maps/Limnodynastes_dorsalis.RData")
+limnodynastes_dorsalis <- st_as_sf(range_map) 
+```
+
+Plot all species ranges on Australian continent map:
+
+```{r}
+all_ranges_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  # limnodynastes dorsalis
+  geom_sf(data = limnodynastes_dorsalis, 
+          fill = "tan1", color = "tan1", alpha = 0.6) +
+  # limnodynastes peronii
+  geom_sf(data = limnodynastes_peronii, 
+          fill = "indianred1", color = "indianred1", alpha = 0.6) + 
+  # crinia parinsignifera
+  geom_sf(data = crinia_parinsignifera, 
+          fill = "steelblue1", color = "steelblue1", alpha = 0.6) +
+  # crinia insignifera
+  geom_sf(data = crinia_insignifera, 
+          fill = "darkseagreen", color = "darkseagreen", alpha = 0.7) +
+  # litoria chloris
+  geom_sf(data = litoria_chloris, 
+          fill = "gray", color = "gray", alpha = 0.7) +
+  # litoria xanthomera
+  geom_sf(data = litoria_xanthomera, 
+          fill = "black", color = "black", alpha = 0.5) +
+  xlim(110,155) + ylim(45, 10) +
+  ggtitle("All Species Ranges")
+all_ranges_plot
+```
+
+For Figure 1, map each genus-pair of species:
+
+```{r}
+crinia_ranges_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  # crinia parinsignifera
+  geom_sf(data = crinia_parinsignifera, 
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  # crinia insignifera
+  geom_sf(data = crinia_insignifera, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  xlim(110,155) + ylim(45, 10) +
+  ggtitle("Crinia Species Ranges")
+
+crinia_ranges_plot
+#ggsave(filename = "crinia_ranges_plot.png",
+ #      plot = crinia_ranges_plot,
+  #     path = "exported_figures",
+   #    device = "png",
+    #   dpi = 1200)
+
+litoria_ranges_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  # litoria chloris
+  geom_sf(data = litoria_chloris, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  # litoria xanthomera
+  geom_sf(data = litoria_xanthomera, 
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  xlim(110,155) + ylim(45, 10) +
+  ggtitle("Litoria Species Ranges")
+
+litoria_ranges_plot
+#ggsave(filename = "litoria_ranges_plot.png",
+ #      plot = litoria_ranges_plot,
+  #     path = "exported_figures",
+   #    device = "png",
+    #   dpi = 1200)
+
+limnodynastes_ranges_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  # limnodynastes dorsalis
+  geom_sf(data = limnodynastes_dorsalis, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  # limnodynastes peronii
+  geom_sf(data = limnodynastes_peronii,  
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  xlim(110,155) + ylim(45, 10) +
+  ggtitle("Limnodynastes Species Ranges")
+
+limnodynastes_ranges_plot
+#ggsave(filename = "limnodynastes_ranges_plot.png",
+ #      plot = limnodynastes_ranges_plot,
+  #     path = "exported_figures",
+   #    device = "png",
+    #   dpi = 1200)
+```
+
+
+# Map Species Ranges With Locations of Recordings Used
+
+These are for supplementary figure 1.
+
+Crinia parinsignifera:
+
+```{r}
+cp_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Crinia parinsignifera")
+cp_records_sf <- st_as_sf(cp_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+cp_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  geom_sf(data = crinia_parinsignifera, 
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  geom_sf(data = cp_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Crinia parinsignifera")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(140,145,150),
+                     limits = c(137, 153)) +
+  scale_y_continuous(breaks = c(-25, -30, -35),
+                     limits = c(-39, -23))
+
+cp_rec_plot
+#ggsave(filename = "cp_rec_plot.jpeg",
+ #      plot = cp_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+Crinia insignifera:
+
+```{r}
+ci_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Crinia insignifera")
+ci_records_sf <- st_as_sf(ci_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+ci_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  geom_sf(data = crinia_insignifera, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  geom_sf(data = ci_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Crinia insignifera")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(114,116),
+                     limits = c(113, 117)) +
+  scale_y_continuous(breaks = c(-30, -32, -34),
+                     limits = c(-34, -30))
+ci_rec_plot
+#ggsave(filename = "ci_rec_plot.jpeg",
+ #      plot = ci_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+Litoria chloris:
+
+```{r}
+lc_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Litoria chloris")
+lc_records_sf <- st_as_sf(lc_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+lc_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  geom_sf(data = litoria_chloris, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  geom_sf(data = lc_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Litoria chloris")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(145,150,155),
+                     limits = c(143, 159)) +
+  scale_y_continuous(breaks = c(-20, -25, -30),
+                     limits = c(-35, -19))
+lc_rec_plot
+#ggsave(filename = "lc_rec_plot.jpeg",
+ #      plot = lc_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+Litoria xanthomera:
+
+```{r}
+lx_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Litoria xanthomera")
+lx_records_sf <- st_as_sf(lx_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+lx_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  geom_sf(data = litoria_xanthomera, 
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  geom_sf(data = lx_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Litoria xanthomera")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(144,146,148),
+                     limits = c(144, 148)) +
+  scale_y_continuous(breaks = c(-16, -18),
+                     limits = c(-19.5, -15.5))
+lx_rec_plot
+#ggsave(filename = "lx_rec_plot.jpeg",
+ #      plot = lx_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+Limnodynastes dorsalis:
+
+```{r}
+ld_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Limnodynastes dorsalis")
+ld_records_sf <- st_as_sf(ld_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+ld_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+ geom_sf(data = limnodynastes_dorsalis, 
+          fill = rgb(168/255,221/255,181/255), alpha = 0.8, 
+          color = rgb(168/255,221/255,181/255)) +
+  geom_sf(data = ld_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Limnodynastes dorsalis")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(114,118,122),
+                     limits = c(113, 125)) +
+  scale_y_continuous(breaks = c(-28, -32, -36),
+                     limits = c(-36, -27))
+ld_rec_plot
+#ggsave(filename = "ld_rec_plot.jpeg",
+ #      plot = ld_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+Limnodynastes peronii:
+
+```{r}
+lp_records <- per.individual %>%
+  dplyr::select(id, species, lat, lng) %>%
+  dplyr::filter(species == "Limnodynastes peronii")
+lp_records_sf <- st_as_sf(lp_records, 
+                          coords = c("lng", "lat"), 
+                          crs = 4326, agr = "constant")
+
+lp_rec_plot <- ggplot() +
+  theme_classic() +
+  geom_sf(data = aus) +
+  geom_sf(data = limnodynastes_peronii,  
+          fill = rgb(67/255,162/255,202/255), alpha = 0.8, 
+          color = rgb(67/255,162/255,202/255)) +
+  geom_sf(data = lp_records_sf, 
+          size = 2, shape = 19, 
+          color = "black") +
+  ggtitle(expression(paste(italic("Limnodynastes peronii")))) +
+  theme(title = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10)) +
+  scale_x_continuous(breaks = c(135,145,155),
+                     limits = c(130, 160)) +
+  scale_y_continuous(breaks = c(-20, -30, -40),
+                     limits = c(-43, -13))
+lp_rec_plot
+#ggsave(filename = "lp_rec_plot.jpeg",
+ #      plot = lp_rec_plot,
+  #     path = "./exported_figures/ind_sp_maps",
+   #    device = "jpeg",
+    #   width = 3, height = 3,
+     #  dpi = 1200)
+```
+
+
+
+
+# Temperature Model
+
+Scale data (z-score) to compare between species:
+
+```{r}
+scaled_dat <- per.ind.sp %>%
+  group_by(species) %>%
+  mutate(z_freq=((ind_mean_freq-sp_mean_freq)/sp_sd_freq)) %>%
+  mutate(z_time=((ind_mean_time-sp_mean_time)/sp_sd_time))
+```
+
+Load in temperature data and join:
+
+```{r}
+temp_dat <- readRDS("data_for_analysis/recording_temp_estimates.RDS")
+
+data_with_temp <- left_join(scaled_dat,
+                            temp_dat,
+                            by = c("id", "species"))
+```
+
+Plot call variables ~ temperature:
+
+```{r}
+data_with_temp %>%
+  rename(Frequency = z_freq) %>%
+  rename('Call Duration' = z_time) %>%
+  gather(key = "Variable", value = "value", c(Frequency, 'Call Duration')) %>%
+  ggplot(., aes(x = Hourly_temp, y = value, color = species))+
+  geom_smooth(method = "lm", formula = y ~ x, fill = NA)+
+  theme_classic()+
+  scale_colour_manual(name = "Species",
+                        values = c("tan1","indianred1",
+                                   "steelblue1","darkseagreen",
+                                   "gray","black")) +
+  theme(axis.text = element_text(color = "black"))+
+  facet_wrap(~Variable, scale = "free")+
+  ylab("Z-Score of Call Values")+
+  xlab("Hourly Temperature (degrees Celsius)")
+
+data_with_temp %>%
+  rename(Frequency = ind_mean_freq) %>%
+  rename('Call Duration' = ind_mean_time) %>%
+  gather(key = "Variable", value = "value", c(Frequency, 'Call Duration')) %>%
+  ggplot(., aes(x = Hourly_temp, y = value, color = species))+
+  geom_smooth(method = "lm", formula = y ~ x, fill = NA)+
+  theme_classic()+
+  scale_colour_manual(name = "Species",
+                        values = c("tan1","indianred1",
+                                   "steelblue1","darkseagreen",
+                                   "gray","black")) +
+  theme(axis.text = element_text(color = "black"))+
+  facet_wrap(~Variable, scale = "free")+
+  ylab("Call Value")+
+  xlab("Hourly Temperature (degrees Celsius)")
+```
+
+We use the raw call variable values in the models:
+
+```{r}
+# call duration
+time_by_temp_glm <- glm(data = data_with_temp, 
+                      ind_mean_time ~ Hourly_temp)
+summary(time_by_temp_glm)
+
+# frequency
+freq_by_temp_glm <- glm(data = data_with_temp, 
+                      ind_mean_freq ~ Hourly_temp)
+summary(freq_by_temp_glm)
+```
+
+Export summary data:
+
+```{r}
+#write_csv(data_with_temp, "data_for_analysis/summary_data.csv")
+```

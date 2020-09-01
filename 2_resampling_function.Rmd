@@ -1,0 +1,119 @@
+---
+title: "Function to Get Call Variation Based on Resampling"
+authors: "Savannah Weaver, Corey Callaghan"
+date: "01/01/2020"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 1
+---
+
+# Load Packages
+
+```{r setup, echo=T, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("readr")) install.packages("readr")
+library("readr")
+if (!require("dplyr")) install.packages("dplyr")
+library("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+library("tidyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+if (!require("sf")) install.packages("sf")
+library("sf")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("lwgeom")) install.packages("lwgeom")
+library("lwgeom")
+```
+
+
+# Read In Data
+
+```{r, echo=T, message=FALSE}
+data <- read_csv("data_for_analysis/summary_data.csv")
+```
+
+
+# Make a Resampling/Bootstrapping Function
+
+For each species, we draw 1000 samples of n observations (n = 3 to the number of individuals sampled for that species). For each sample, we measure the standard deviation of peak frequency and standard deviation of call duration, and note the number of individuals in that sample
+
+The summary_function computes the standard deviations of peak frequency and call duration for a given sample.
+
+```{r}
+summary_function <- function(draw, species_x){
+  
+  # do for each species
+  sample_dat <- data %>%
+    dplyr::filter(species==species_x) %>%
+    ungroup() %>%
+    sample_n(draw)
+  
+  # get summary data
+  summary_dat <- data.frame(sd_time=sd(sample_dat$ind_mean_time),
+                            sd_freq=sd(sample_dat$ind_mean_freq)) %>%
+    mutate(n_samples=draw)
+  
+  # return data
+  return(summary_dat)
+}
+```
+
+The boot_function repeats summary_function 1000 times for each "draw" of n observations.
+
+```{r}
+boot_function <- function(draw, species_x){
+  
+  # do 1000 samples for each draw and put into one dataframe
+  # currently set to 10 for testing
+  summary_dat <- do.call("rbind", purrr::rerun(1000, summary_function(draw, species_x)))
+  # return dataframe 
+  return(summary_dat)
+}
+```
+
+The species_function applies the above functions to a given species and saves the results:
+
+```{r}
+species_function <- function(species_name){
+  
+  # get the data and do function for one species
+  data_to_analyze <- data %>%
+    dplyr::filter(species==species_name)
+  
+  # make a vector of list of possible n values
+  vector_of_draws <- rep(3:48, by=1)
+  
+  # apply function to vector
+  list_of_results <- lapply(vector_of_draws, 
+                            boot_function, 
+                            species_x=species_name)
+  
+  # put results into dataframe
+  df_of_results <- bind_rows(list_of_results) %>%
+    mutate(species=species_name)
+  
+  # return dataframe of results
+  return(df_of_results)
+}
+```
+
+This code chunk runs the above functions for each species and saves the results:
+
+```{r}
+# do everything for every species
+species_sd_summary_list <- lapply(unique(data$species),
+                                  function(x){species_function(x)})
+
+# put all data for each species into one dataframe
+species_sd_summary_df <- bind_rows(species_sd_summary_list)
+
+# export
+saveRDS(species_sd_summary_df,
+        "data_for_analysis/standard_deviation_by_sample_size_data.RDS") 
+```
+
+The exported RDS file is analyzed in the "3_resampling_analysis.Rmd" file.

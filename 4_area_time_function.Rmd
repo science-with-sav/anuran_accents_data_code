@@ -1,0 +1,155 @@
+---
+title: "Function to Get Call Variation Based on Area and Time"
+authors: "Savannah Weaver, Corey Callaghan"
+date: "January 01, 2020"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 1
+---
+
+# Load Packages
+
+```{r setup, echo=T, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("readr")) install.packages("readr")
+library("readr")
+if (!require("dplyr")) install.packages("dplyr")
+library("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+library("tidyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+if (!require("sf")) install.packages("sf")
+library("sf")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("lwgeom")) install.packages("lwgeom")
+library("lwgeom")
+if (!require("stringr")) install.packages("stringr")
+library("stringr")
+```
+
+
+# Read In Data
+
+```{r, echo=T, message=FALSE}
+data <- read_csv("data_for_analysis/summary_data.csv")
+```
+
+
+# Make the Function
+
+Calculate standard deviations of peak frequency and call duration, now as a function of time and geographic space. We run this for sample sizes 10, 20, 30, and 40, but only use n=20 later on. We measure the standard deviations, intra-annual difference in days, maximum geographic distance, and convex hull area (geographic area covered by the individuals in a given sample) for each sample.
+
+The sd_variables_function calculates all these values:
+
+```{r}
+sd_variables_function <- function(draw, species_x){
+  
+  # do for each species
+  sample_dat <- data %>%
+    dplyr::filter(species==species_x) %>%
+    ungroup() %>%
+    sample_n(draw)
+  
+  # this part makes it so that if the genus is Litoria
+  # then it takes the intra-annual difference across the season
+  # this only really applies for litoria as the other two genera
+  # have breeding seasons that are within a year
+  genus <- word(species_x, 1)
+  
+  # get temporal difference of observations
+  time_diff <- ifelse(genus == "Litoria", 
+                      365 - max(yday(date(sample_dat$date)))+
+                        min(yday(date(sample_dat$date))),
+                      max(yday(date(sample_dat$date))) -
+                        min(yday(date(sample_dat$date))))
+  
+  
+  # convert FrogID points into sf format to use with polygons
+  crs <- "+proj=longlat +ellps=GRS80 +no_defs"
+  points_sf <- st_as_sf(sample_dat, 
+                        coords = c("lng", "lat"), 
+                        crs = crs, 
+                        agr = "constant")
+  
+  # calculate polygon area for group of observations
+  convex_hull <- st_convex_hull(st_union(points_sf))
+  
+  # calculate summary data and put all data into one dataframe
+  summary_dat <- data.frame(sd_time=sd(sample_dat$ind_mean_time),
+                            sd_freq=sd(sample_dat$ind_mean_freq)) %>%
+    mutate(intra_annual_diff_days=time_diff) %>%
+    mutate(convex_hull_area_km2=as.numeric(st_area(convex_hull))/1000) %>%
+    mutate(max_distance_km=as.numeric(max(st_distance(points_sf)))/1000) %>%
+    mutate(n_samples=draw) %>%
+    mutate(centroid_lng=as.data.frame(st_coordinates(st_centroid(convex_hull)))$X) %>%
+    mutate(centroid_lat=as.data.frame(st_coordinates(st_centroid(convex_hull)))$Y)
+  
+  # return dataframe of all calculated data
+  return(summary_dat)
+}
+```
+
+The boot_function_time_space repeats the sampling process 1000 times:
+
+```{r}
+boot_function_time_space <- function(draw, species_x){
+  
+  # rerun calculating variables for samples 1000 times
+  # currently only 10 for testing purposes
+  summary_dat <- do.call("rbind", 
+                         purrr::rerun(1000, 
+                                      sd_variables_function(draw, 
+                                                            species_x)))
+  
+  # return the dataframe of all the reruns
+  return(summary_dat)
+}
+```
+
+The species_time_space_function applies the above functions to the 4 different sample sizes and to a given species:
+
+```{r}
+species_time_space_function <- function(species_name){
+  
+  # get data and do by species
+  data_to_analyze <- data %>%
+    dplyr::filter(species==species_name)
+  
+  # make a vector to run this function over
+  ######NOTE: need to change to pick one sample size, probably 10 or 20
+  vector_of_draws <- c(10, 20, 30, 40)
+  
+  # apply function to vector
+  ##### We may not actually need this
+  list_of_results <- lapply(vector_of_draws, 
+                            boot_function_time_space, 
+                            species_x=species_name)
+
+  # put into dataframe
+  df_of_results <- bind_rows(list_of_results) %>%
+    mutate(species=species_name)
+  
+  # return dataframe with all calculated data
+  return(df_of_results)
+}
+```
+
+This code chunk runs the above functions for each species and saves the results:
+
+```{r}
+# do everything for each species
+species_sd_correlation_list <- lapply(unique(data$species),
+                                      function(x){species_time_space_function(x)})
+
+# put all data for each species into one dataframe
+species_sd_correlation_df <- bind_rows(species_sd_correlation_list) 
+
+# export
+saveRDS(species_sd_correlation_df, "data_for_analysis/standard_deviation_resampled_by_area_and_time.RDS")
+```
+
+The exported RDS file is analyzed in the "5_area_time_analysis.Rmd" file.

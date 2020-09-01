@@ -1,0 +1,187 @@
+---
+title: "Analysis of the Individual Resampling Dataset"
+authors: "Savannah Weaver, Corey Callaghan"
+date: "01/01/2020"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 1
+---
+
+# Load Packages
+
+```{r setup, echo=T, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("readr")) install.packages("readr")
+library("readr")
+if (!require("dplyr")) install.packages("dplyr")
+library("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+library("tidyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("lwgeom")) install.packages("lwgeom")
+library("lwgeom")
+if (!require("lme4")) install.packages("lme4")
+library("lme4")
+if (!require("lmerTest")) install.packages("lmerTest")
+library("lmerTest")
+if (!require("broom")) install.packages("broom")
+library("broom")
+if (!require("mgcv")) install.packages("mgcv")
+library("mgcv")
+if (!require("nlme")) install.packages("nlme")
+library("nlme")
+library(extrafont)
+loadfonts()
+```
+
+
+# Reading In Data
+
+Get data we made with functions in file 2, and check for correct uploading:
+
+```{r, echo=T, message=FALSE}
+data <- read_rds("data_for_analysis/standard_deviation_by_sample_size_data.RDS")
+range(data$n_samples)
+```
+
+Load in the species summary data and check format:
+
+```{r, echo=T, message=FALSE}
+species_values <- read_csv("data_for_analysis/species_data.csv")
+species_values
+```
+
+
+# Goal
+
+Investigate how much variation there is within each species call, how many individuals *should* be measured to account for that variation in species definitions, and whether these values differ between species.
+
+
+# Plot Each Species Separately
+
+This figure shows all data.
+
+```{r}
+data %>%
+  rename(Frequency = sd_freq) %>%
+  rename("Call Duration" = sd_time) %>%
+  gather(key = "Variable", value = "value", c(Frequency, "Call Duration")) %>%
+  ggplot(., aes(x = n_samples, y = value)) +
+  geom_jitter() +
+  theme_classic() +
+  theme(axis.text = element_text(color = "black")) +
+  facet_wrap(species ~ Variable, scale = "free") +
+  ylab("Standard Deviation") +
+  xlab("Number of Individuals in a Sample")
+```
+
+
+# Plot All Species Together
+
+Scale and join necessary data:
+
+```{r}
+# get values
+actual <- species_values
+
+# join and scale
+scale_all <- data %>%
+  left_join(., actual,
+            by = "species") %>%
+  group_by(species) %>%
+  mutate(z_sd_time= ((sd_time) - sp_sd_time) / sd(sd_time)) %>%
+  mutate(z_sd_freq= ((sd_freq) - sp_sd_freq) / sd(sd_freq)) %>%
+  group_by(species, n_samples) %>%
+  mutate(max_z_time = max(abs(z_sd_time))) %>%
+  mutate(max_z_freq = max(abs(z_sd_freq)))
+
+# test correct calculations
+scale_all %>% 
+  group_by(n_samples,species) %>% 
+  summarise(test_time = mean(max_z_time),
+            test_freq = mean(max_z_freq))
+
+```
+
+This figure only plots the **maximum** standard deviations, relativized to the actual standard deviation for each species we measured.
+
+```{r}
+max_points <- scale_all %>%
+  group_by(species) %>%
+  rename("Peak Frequency" = 'max_z_freq') %>%
+  rename("Call Duration" = 'max_z_time') %>%
+  gather(key = "Variable", 
+         value = "value", 
+         c("Peak Frequency", 
+           "Call Duration")) %>%
+  dplyr::select(species, value, Variable, n_samples) %>%
+  distinct() %>% # makes much smaller dataframe to plot (and quicker)
+  ggplot() +
+  geom_point(aes(x = n_samples, y = value, 
+                 color = as.factor(species),
+                 shape = as.factor(species)),
+             size = 2, alpha = 0.4) +
+  scale_colour_manual(labels = c(expression(italic("Crinia insignifera")),
+                                 expression(italic("Crinia parinsignifera")),
+                                 expression(italic("Limnodynastes dorsalis")),
+                                 expression(italic("Limnodynastes peronii")),
+                                 expression(italic("Litoria chloris")),
+                                 expression(italic("Litoria xanthomera"))),
+                      values = c(rep(c(rgb(168/255,221/255,181/255),
+                                       rgb(67/255,162/255,202/255)),3))) +
+  scale_shape_manual(labels = c(expression(italic("Crinia insignifera")),
+                                 expression(italic("Crinia parinsignifera")),
+                                 expression(italic("Limnodynastes dorsalis")),
+                                 expression(italic("Limnodynastes peronii")),
+                                 expression(italic("Litoria chloris")),
+                                 expression(italic("Litoria xanthomera"))),
+                     values = c(15,15,16,16,17,17)) +
+  geom_smooth(aes(x = n_samples, y = value, 
+                 color = as.factor(species),
+                 linetype = as.factor(species)), 
+              method = 'loess',
+              formula = y ~ x,
+              se = FALSE,
+              size = 0.5, alpha = 1) +
+  scale_linetype_manual(labels = c(expression(italic("Crinia insignifera")),
+                                 expression(italic("Crinia parinsignifera")),
+                                 expression(italic("Limnodynastes dorsalis")),
+                                 expression(italic("Limnodynastes peronii")),
+                                 expression(italic("Litoria chloris")),
+                                 expression(italic("Litoria xanthomera"))),
+                     values = c("solid", "solid", 
+                                "longdash", "longdash", 
+                                "dotted", "dotted")) +
+  geom_vline(xintercept = 20, 
+             color = "black", 
+             linetype = "dashed", 
+             size = 1.2) +
+  theme_bw() +
+  theme(text = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        legend.text.align = 0,
+        legend.position = "bottom",
+        legend.title = element_blank()) +
+  xlim(0,50) +
+  facet_wrap(~ Variable, scale = "free") +
+  ylab("Maximum Absolute Standard Deviation") +
+  xlab("Number of Individuals in a Sample")
+
+max_points
+#ggsave(filename = "max_points.png",
+ #      plot = max_points,
+  #     path = "./exported_figures",
+   #    device = "png",
+    #   dpi = 2400,
+     #  width = 7, height = 5)
+```
+

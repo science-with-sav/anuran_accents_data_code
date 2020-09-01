@@ -1,0 +1,560 @@
+---
+title: "Analysis of the Area Time Resampling Dataset"
+authors: "Savannah Weaver, Corey Callaghan"
+date: "01/01/2020"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 1
+---
+
+# Load Packages
+
+```{r setup, echo=T, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+if (!require("tidyverse")) install.packages("tidyverse")
+library("tidyverse")
+if (!require("readr")) install.packages("readr")
+library("readr")
+if (!require("dplyr")) install.packages("dplyr")
+library("dplyr")
+if (!require("tidyr")) install.packages("tidyr")
+library("tidyr")
+if (!require("ggplot2")) install.packages("ggplot2")
+library("ggplot2")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("lwgeom")) install.packages("lwgeom")
+library("lwgeom")
+if (!require("lme4")) install.packages("lme4")
+library("lme4")
+if (!require("lmerTest")) install.packages("lmerTest")
+library("lmerTest")
+if (!require("broom")) install.packages("broom")
+library("broom")
+if (!require("broom.mixed")) install.packages("broom.mixed")
+library("broom.mixed")
+if (!require("MASS")) install.packages("MASS")
+library("MASS")
+if (!require("purrr")) install.packages("purrr")
+library("purrr")
+if (!require("scales")) install.packages("scales")
+library("scales")
+if (!require("patchwork")) install.packages("patchwork")
+library("patchwork")
+if (!require("scales")) install.packages("scales")
+library("scales")
+library(extrafont)
+loadfonts()
+```
+
+
+# Reading In Data
+
+Get the datasets we made with bootstrapping, and check them for correct uploading.
+
+```{r, echo=T, message=FALSE}
+data <- read_rds("data_for_analysis/standard_deviation_resampled_by_area_and_time.RDS")
+unique(data$n_samples)
+```
+
+We know we tried sample sizes of 10, 20, 30, and 40, so we can tell the data loaded in correctly.
+
+Before we make plots, scale every samples variables (z-scores within species). We calculate mean and standard deviation for each species, then use those to calculate z-scores:
+
+```{r}
+scaled_area_days <- data %>%
+  group_by(species, n_samples) %>%
+  mutate(mean_sd_time = mean(sd_time)) %>%
+  mutate(sd_sd_time = sd(sd_time)) %>%
+  mutate(mean_sd_freq = mean(sd_freq)) %>%
+  mutate(sd_sd_freq = sd(sd_freq)) %>%
+  mutate(mean_diff_days = mean(intra_annual_diff_days)) %>%
+  mutate(sd_diff_days = sd(intra_annual_diff_days)) %>%
+  mutate(mean_area_km2 = mean(convex_hull_area_km2)) %>%
+  mutate(sd_area_km2 = sd(convex_hull_area_km2)) %>%
+  mutate(mean_max_km = mean(max_distance_km)) %>%
+  mutate(sd_max_km = sd(max_distance_km)) %>%
+  mutate(mean_lat = mean(centroid_lat)) %>%
+  mutate(sd_lat = sd(centroid_lat)) %>%
+  mutate(mean_lng = mean(centroid_lng)) %>%
+  mutate(sd_lng = sd(centroid_lng)) %>%
+  mutate(z_sd_time = (sd_time - mean_sd_time) / sd_sd_time) %>%
+  mutate(z_sd_freq = (sd_freq - mean_sd_freq) / sd_sd_freq) %>%
+  mutate(z_diff_days = (intra_annual_diff_days - mean_diff_days) / sd_diff_days) %>%
+  mutate(z_area_km2 = (convex_hull_area_km2 - mean_area_km2) / sd_area_km2) %>%
+  mutate(z_max_km = (max_distance_km - mean_max_km) / sd_max_km) %>%
+  mutate(z_centroid_lat = (centroid_lat - mean_lat) / sd_lat) %>%
+  mutate(z_centroid_lng = (centroid_lng - mean_lng) / sd_lng)
+```
+
+Also rename the most important variables to make recall easy:
+
+```{r}
+# prepare data
+model_dat <- scaled_area_days %>%
+  dplyr::filter(n_samples == 20) %>%
+  rename(Frequency = "z_sd_freq") %>%
+  rename(Time = "z_sd_time") %>%
+  rename(Days = "z_diff_days") %>%
+  rename(Area = "z_area_km2")
+```
+
+Check the response variable distributions before and after taking z-score:
+
+```{r}
+# sd freq
+ggplot(model_dat, aes(x = sd_freq)) +
+  geom_histogram(color = "black", fill = "darkseagreen", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Standard Deviation of Frequency")
+
+# z sd freq
+ggplot(model_dat, aes(x = Frequency)) +
+  geom_histogram(color = "black", fill = "darkseagreen", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Z-Score Standard Deviation of Frequency")
+
+# sd time
+ggplot(model_dat, aes(x = sd_time))+
+  geom_histogram(color = "black", fill = "darkseagreen", bins = 50)+
+  theme_bw()+
+  facet_wrap(~species, scales = "free")+
+  xlab("Standard Deviation of Time")
+
+# z sd time
+ggplot(model_dat, aes(x = Time))+
+  geom_histogram(color = "black", fill = "darkseagreen", bins = 50)+
+  theme_bw()+
+  facet_wrap(~species, scales = "free")+
+  xlab("Z-Score Standard Deviation of Time")
+```
+
+Check the predictor variable distributions before and after taking z-score:
+
+```{r}
+# area
+ggplot(model_dat, aes(x = convex_hull_area_km2)) +
+  geom_histogram(color = "black", fill = "steelblue", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab(expression(paste("Convex Hull Area (km"^"2",")")))
+
+# zscore area
+ggplot(model_dat, aes(x = Area)) +
+  geom_histogram(color = "black", fill = "steelblue", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab(expression(paste("Z-Score Convex Hull Area (km"^"2",")")))
+
+# days
+ggplot(model_dat, aes(x = intra_annual_diff_days)) +
+  geom_histogram(color = "black", fill = "steelblue", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Intra-annual Difference (Days)")
+
+# zscore days
+ggplot(model_dat, aes(x = Days)) +
+  geom_histogram(color = "black", fill = "steelblue", bins = 50) +
+  theme_bw() +
+  facet_wrap(~species, scales = "free") +
+  xlab("Z-Score Intra-annual Difference (Days)")
+```
+
+
+# Plot sample SD as a function of **Area** and **Days**
+
+In our plots, we only use the samples with n=20. 
+
+```{r}
+# call variables ~ area
+scaled_area_days %>%
+  dplyr::filter(n_samples == 20) %>%
+  rename("Peak Frequency" = "sd_freq") %>%
+  rename("Call Duration" = "sd_time") %>%
+  gather(key = "Variable",
+         value = "value",
+         c("Peak Frequency", "Call Duration")) %>%
+  ggplot(., aes(x = log10(convex_hull_area_km2),
+                y = value,
+                color = Variable)) +
+  geom_smooth(method = "lm",
+              formula = y ~ x) +
+  scale_colour_manual(values = c(rep(c(rgb(168/255,221/255,181/255),
+                                       rgb(67/255,162/255,202/255)),3))) +
+  facet_wrap(species ~ Variable, scales = "free") +
+  ylab("Standard Deviation") +
+  xlab(expression(paste("log10 Geographic Area (km"^"2",")"))) +
+  theme_bw() +
+  scale_x_continuous(breaks = scales::pretty_breaks(3)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(3)) +
+  theme(text = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        strip.background = element_rect(color = "white", 
+                                        fill = "white", 
+                                        size = 1, 
+                                        linetype = "solid"),
+        strip.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        legend.position = "none") -> call_var_by_area
+
+call_var_by_area
+# export plot
+#ggsave(filename =  "geographic_area_lines.png",
+ #      plot = call_var_by_area,
+  #     path = "exported_figures",
+   #    device = "png",
+    #   dpi = 1200,
+     #  width = 7, height = 6)
+
+
+
+# call variables ~ days
+scaled_area_days %>%
+  dplyr::filter(n_samples == 20) %>%
+  rename("Peak Frequency" = "sd_freq") %>%
+  rename("Call Duration" = "sd_time") %>%
+  gather(key = "Variable",
+         value = "value",
+         c("Peak Frequency", "Call Duration")) %>%
+  ggplot(., aes(x = intra_annual_diff_days,
+                y = value,
+                color = Variable)) +
+  geom_smooth(method = "lm",
+              formula = y ~ x) +
+  scale_colour_manual(values = c(rep(c(rgb(168/255,221/255,181/255),
+                                       rgb(67/255,162/255,202/255)),3))) +
+  facet_wrap(species ~ Variable, scales = "free") +
+  ylab("Standard Deviation") +
+  xlab("Intra-annual Time Difference (Days)") +
+  theme_bw() +
+  scale_x_continuous(breaks = scales::pretty_breaks(4)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(3)) +
+  theme(text = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        strip.background = element_rect(color = "white", 
+                                        fill = "white", 
+                                        size = 1, 
+                                        linetype = "solid"),
+        strip.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        legend.position = "none") -> call_var_by_days
+
+call_var_by_days
+# export plot
+#ggsave(filename =  "intra_annual_days_lines.png",
+ #      plot = call_var_by_days,
+  #     path = "exported_figures",
+   #    device = "png",
+    #   dpi = 1200,
+     #  width = 7, height = 6)
+```
+
+
+# Model Relationships
+
+We do a global mixed model for each combination of: 
+*predictor variables*: area, days
+*response variables*: z-score of sample peak frequency standard deviation,
+z-score of sample call time duration standard deviation. Species is included in the model.
+
+```{r}
+# time ~ area
+mixed_mod_time_area <- lmer(Time ~ Area + (1|species), 
+                            data = model_dat)
+AT <- broom.mixed::tidy(mixed_mod_time_area)
+AT$predictor <- "Area"
+AT$response <- "Time"
+
+# time ~ days
+mixed_mod_time_days <- lmer(Time ~ Days + (1|species), 
+                            data = model_dat)
+DT <- broom.mixed::tidy(mixed_mod_time_days)
+DT$predictor <- "Days"
+DT$response <- "Time"
+
+# freq ~ area
+mixed_mod_freq_area <- lmer(Frequency ~ Area + (1|species), 
+                            data = model_dat)
+AF <- broom.mixed::tidy(mixed_mod_freq_area)
+AF$predictor <- "Area"
+AF$response <- "Frequency"
+
+# freq ~ days
+mixed_mod_freq_days <- lmer(Frequency ~ Days + (1|species), 
+                            data = model_dat)
+DF <- broom.mixed::tidy(mixed_mod_freq_days)
+DF$predictor <- "Days"
+DF$response <- "Frequency"
+
+# put all into one dataframe
+all_mixed_mods <- AT %>%
+  bind_rows(.,DT,AF,DF) %>%
+  dplyr::filter(effect == "fixed")
+
+# save mixed model data
+write_csv(all_mixed_mods, "exported_tables/all_mixed_mods.csv")
+```
+
+Model for **each species separately**:
+
+```{r, message=FALSE}
+# time ~ area
+time_area_models <- model_dat %>%
+  nest(-species) %>%
+  mutate(
+    fit = map(data, ~ lm(Time ~ Area, data = .x)),
+    tidied = map(fit, tidy),
+    glanced = map(fit, glance),
+    confint = map(fit, confint_tidy)
+  )
+
+time_area_summary <- time_area_models %>%
+  unnest(tidied) %>%
+  dplyr::select(-data, -fit, -glanced, -confint) %>%
+  left_join(., time_area_models %>%
+              unnest(glanced) %>%
+              dplyr::select(-data, -fit, -tidied, -confint), 
+            by = "species") %>%
+  left_join(., time_area_models %>%
+              unnest(confint) %>%
+              dplyr::select(-data, -fit, -tidied, -glanced) %>%
+              group_by(species) %>%
+              slice(2), by = "species") %>%
+  mutate(model = "time_vs_area")
+
+# time ~ days
+time_days_models <- model_dat %>%
+  nest(-species) %>%
+  mutate(
+    fit = map(data, ~ lm(Time ~ Days, data = .x)),
+    tidied = map(fit, tidy),
+    glanced = map(fit, glance),
+    confint = map(fit, confint_tidy)
+  )
+
+time_days_summary <- time_days_models %>%
+  unnest(tidied) %>%
+  dplyr::select(-data, -fit, -glanced, -confint) %>%
+  left_join(., time_days_models %>%
+              unnest(glanced) %>%
+              dplyr::select(-data, -fit, -tidied, -confint), 
+            by = "species") %>%
+  left_join(., time_days_models %>%
+              unnest(confint) %>%
+              dplyr::select(-data, -fit, -tidied, -glanced) %>%
+              group_by(species) %>%
+              slice(2), by = "species") %>%
+  mutate(model = "time_vs_days")
+
+# freq ~ area
+freq_area_models <- model_dat %>%
+  nest(-species) %>%
+  mutate(
+    fit = map(data, ~ lm(Frequency ~ Area, data = .x)),
+    tidied = map(fit, tidy),
+    glanced = map(fit, glance),
+    confint = map(fit, confint_tidy)
+  )
+
+freq_area_summary <- freq_area_models %>%
+  unnest(tidied) %>%
+  dplyr::select(-data, -fit, -glanced, -confint) %>%
+  left_join(., freq_area_models %>%
+              unnest(glanced) %>%
+              dplyr::select(-data, -fit, -tidied, -confint), 
+            by = "species") %>%
+  left_join(., freq_area_models %>%
+              unnest(confint) %>%
+              dplyr::select(-data, -fit, -tidied, -glanced) %>%
+              group_by(species) %>%
+              slice(2), by = "species") %>%
+  mutate(model = "freq_vs_area")
+
+# freq ~ days
+freq_days_models <- model_dat %>%
+  nest(-species) %>%
+  mutate(
+    fit = map(data, ~ lm(Frequency ~ Days, data = .x)),
+    tidied = map(fit, tidy),
+    glanced = map(fit, glance),
+    confint = map(fit, confint_tidy)
+  )
+
+freq_days_summary <- freq_days_models %>%
+  unnest(tidied) %>%
+  dplyr::select(-data, -fit, -glanced, -confint) %>%
+  left_join(., freq_days_models %>%
+              unnest(glanced) %>%
+              dplyr::select(-data, -fit, -tidied, -confint), 
+            by = "species") %>%
+  left_join(., freq_days_models %>%
+              unnest(confint) %>%
+              dplyr::select(-data, -fit, -tidied, - glanced) %>%
+              group_by(species) %>%
+              slice(2), by = "species") %>%
+  mutate(model = "freq_vs_days")
+
+# put the model results together and add range data
+all_model_summaries <- time_area_summary %>%
+  bind_rows(time_days_summary) %>%
+  bind_rows(freq_area_summary) %>%
+  bind_rows(freq_days_summary) %>%
+  dplyr::filter(term != "(Intercept)") %>%
+  dplyr::select(-statistic.y, -p.value.y) %>%
+  rename(statistic = statistic.x) %>%
+  rename(p.value = p.value.x) %>%
+  left_join(., read_csv("data_for_analysis/species_ranges.csv") %>%
+              rename(species=Species))
+
+# save
+#write_csv(all_model_summaries, "exported_tables/each_species_model_summaries.csv")
+```
+
+Plot models by species:
+
+```{r}
+all_model_summaries %>%
+  mutate(term = case_when(term == "Area" ~ "Geographic Area",
+                          term == "Days" ~ "Intra-annual Time Difference")) %>%
+  mutate(model = case_when(model == "freq_vs_area" ~ "Peak Frequency",
+                         model == "freq_vs_days" ~ "Peak Frequency",
+                         model == "time_vs_area" ~ "Call Duration",
+                         model == "time_vs_days" ~ "Call Duration"
+  )) %>%
+  ggplot(., aes(x = species, 
+                y = estimate, 
+                color = model)) +
+  geom_hline(yintercept = 0, 
+             color = "black", 
+             linetype = "dashed") +
+  geom_point(size = 2,
+             position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = conf.low, 
+                    ymax = conf.high, 
+                    color = model), 
+                width = 0.4, 
+                position = position_dodge(width = 0.5)) +
+  coord_flip() +
+  theme_bw() +
+  facet_wrap(~ term, scales = "free_x") +
+  xlab("") +
+  ylab("Parameter Estimate") +
+  theme(text = element_text(color = "black", 
+                            family = "sans",
+                            size = 12),
+        axis.text = element_text(color = "black", 
+                            family = "sans",
+                            size = 10),
+        axis.text.y = element_text(face = "italic"),
+        legend.title = element_blank()) +
+  scale_colour_manual(values = c(rep(c(rgb(168/255,221/255,181/255),
+                                       rgb(67/255,162/255,202/255)),3))) +
+  labs(color = "Response: ") +
+  theme(legend.position = "bottom") -> model_est_points
+
+model_est_points
+# export plot
+#ggsave(filename = "model_est_points.png",
+ #      plot = model_est_points,
+  #     path = "./exported_figures",
+   #    device = "png",
+    #   dpi = 2400,
+     #  width = 7, height = 4)
+```
+
+
+# Correlation and Species Range
+
+Does range size mean anything for these results? Does the strength of the above tested correlations vary based on a species range size?
+
+```{r}
+# (call duration ~ days) ~ range
+time_days_range <- all_model_summaries %>% 
+  dplyr::filter(model == "time_vs_days")
+time_days_range_model <- glm(data = time_days_range,
+                             estimate ~ range_size_km2)
+summary(time_days_range_model)
+
+# (call duration ~ area) ~ range
+time_area_range <- all_model_summaries %>% 
+  dplyr::filter(model == "time_vs_area")
+time_area_range_model <- glm(data = time_area_range,
+                             estimate ~ range_size_km2)
+summary(time_area_range_model)
+
+# (frequency ~ days) ~ range
+freq_days_range <- all_model_summaries %>% 
+  dplyr::filter(model == "freq_vs_days")
+freq_days_range_model <- glm(data = freq_days_range,
+                             estimate ~ range_size_km2)
+summary(freq_days_range_model)
+
+# (frequency ~ area) ~ range
+freq_area_range <- all_model_summaries %>% 
+  dplyr::filter(model == "freq_vs_area")
+freq_area_range_model <- glm(data = freq_area_range,
+                             estimate ~ range_size_km2)
+summary(freq_area_range_model)
+```
+
+
+# Correlation and Species Body Size
+
+Does body size mean anything for these results? Does vocal variability depend on maximum potential body size? 
+
+Add body size data:
+
+```{r}
+model_sum_svl <- all_model_summaries %>%
+  left_join(., read_csv("data_for_analysis/body_sizes.csv"),
+                        by = "species") %>%
+  rename(max_male_SVL_mm = male_body_size_max_mm)
+```
+
+Model:
+
+```{r}
+# (call duration ~ days) ~ SVL
+time_days_body <- model_sum_svl %>% 
+  dplyr::filter(model == "time_vs_days")
+time_days_body_model <- glm(data = time_days_body,
+                             estimate ~ max_male_SVL_mm)
+summary(time_days_body_model)
+
+# (call duration ~ area) ~ SVL
+time_area_body <- model_sum_svl %>% 
+  dplyr::filter(model == "time_vs_area")
+time_area_body_model <- glm(data = time_area_body,
+                             estimate ~ max_male_SVL_mm)
+summary(time_area_body_model)
+
+# (frequency ~ days) ~ SVL
+freq_days_body <- model_sum_svl %>% 
+  dplyr::filter(model == "freq_vs_days")
+freq_days_body_model <- glm(data = freq_days_body,
+                             estimate ~ max_male_SVL_mm)
+summary(freq_days_body_model)
+
+# (frequency ~ area) ~ SVL
+freq_area_body <- model_sum_svl %>% 
+  dplyr::filter(model == "freq_vs_area")
+freq_area_body_model <- glm(data = freq_area_body,
+                             estimate ~ max_male_SVL_mm)
+summary(freq_area_body_model)
+```
+
